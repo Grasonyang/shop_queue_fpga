@@ -1,2 +1,0 @@
-ISim log file
-Running: D:\Xilinx\project\final_project\data\top_tb_isim_beh.exe -intstyle ise -gui -tclbatch isim.cmd -wdb D:/Xilinx/project/final_project/data/top_tb_isim_beh.wdb 

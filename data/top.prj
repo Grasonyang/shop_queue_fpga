@@ -1,4 +1,0 @@
-verilog work "queue.v"
-verilog work "dispatcher.v"
-verilog work "counter.v"
-verilog work "top.v"

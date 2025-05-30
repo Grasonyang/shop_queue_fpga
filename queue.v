@@ -1,91 +1,90 @@
-//--------------------------------------------------------------
-//  queue.v  -  簡易參數化 FIFO（深度 DEPTH，預設 3）
-//  - 用於暫存尚未被派發到櫃檯的客人資料
-//  - 每筆資料包含 {客人編號 4-bit, 服務時間 4-bit}
-//--------------------------------------------------------------
-module queue(clk, rst_n, we, dn, dt, re, qn, qt, full, empty, 
-			qdbg); // debug
-    parameter DEPTH = 3;					// 佇列深度
-    parameter PTR_W = 2;          			// PTR_W = (int)(log2(DEPTH))+1
-	// DEPTH = 3 時，PTR_W 固定 2 bit
+module queue #(
+    parameter DEPTH = 3,
+    parameter DATA_W = 8,
+    parameter PTR_W = (DEPTH == 1) ? 1 : $clog2(DEPTH)
+) (
+    input  clk,
+    input  rst,
 
-    input  clk;                          	// 系統時脈
-    input  rst_n;                        	// 同步低有效重設
+    input               we,
+    input  [3:0]        dn_in,
+    input  [3:0]        dt_in,
 
-    // 寫入端 (enqueue)
-    input         we;                       // we=1 且 ~full 時寫入
-    input  [3:0]  dn;                       // data-num  : 客人編號
-    input  [3:0]  dt;                       // data-time : 服務時間
-    
-	// 讀出端 (dequeue)
-    input         re;                       // re=1 且 ~empty 時讀出
-    output [3:0]  qn;                       // queue-num  : 佇列首端客人編號
-    output [3:0]  qt;                       // queue-time : 佇列首端服務時間
-    
-	// 狀態旗標
-    output        full;                     // 佇列已滿
-    output        empty;                    // 佇列為空
-    
-	// 除錯觀察用
-    output [23:0] qdbg;
+    input               re,         // 來自 dispatcher
+    output [3:0]        qn_out,
+    output [3:0]        qt_out,
 
-	//--------------------------------------------------------------
-	//  內部儲存結構
-	//--------------------------------------------------------------
-	reg [3:0] nm [0:DEPTH-1];   // 編號暫存
-	reg [3:0] tm [0:DEPTH-1];   // 時間暫存
+    output              full,
+    output              empty,
 
-	reg [PTR_W-1:0] hd;   // head 讀指標
-	reg [PTR_W-1:0] tl;   // tail 寫指標
-	reg [PTR_W-1:0] ct;   // 佇列目前元素數 (0-DEPTH)
+    output [(DATA_W*DEPTH)-1:0] qdbg
+);
 
-	//--------------------------------------------------------------
-	//  即時輸出
-	//--------------------------------------------------------------
-	assign qn    = nm[hd];               // 讀指標指向的資料
-	assign qt    = tm[hd];
-	assign full  = (ct == DEPTH);        // 已填滿
-	assign empty = (ct == 0);            // 沒有資料
+    localparam COUNT_W = (DEPTH == 0) ? 1 : $clog2(DEPTH + 1);
 
-	// 串接前三筆資料供波形觀察：{num0,time0,num1,time1,num2,time2}
+    reg [DATA_W-1:0] mem [0:DEPTH-1];
+    reg [PTR_W-1:0]  hd_r;      // head 讀指標 (寄存器)
+    reg [PTR_W-1:0]  tl_r;      // tail 寫指標 (寄存器)
+    reg [COUNT_W-1:0] count_r;  // 佇列目前元素數 (寄存器)
 
-	assign qdbg = {nm[0],tm[0],nm[1],tm[1],nm[2],tm[2]};
-	
-	// 給 reset 時的 for 迴圈用
-	integer i;
+    // 中間信號，用於計算下一個狀態
+    wire write_en_comb;
+    wire read_en_comb;
+    wire [PTR_W-1:0] hd_next;
+    wire [PTR_W-1:0] tl_next;
+    wire [COUNT_W-1:0] count_next;
 
-	//--------------------------------------------------------------
-	//  寫入 / 讀出 控制邏輯
-	//--------------------------------------------------------------
-	always @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin
-			hd <= 0;
-			tl <= 0;
-			ct <= 0;
-			for (i = 0; i < DEPTH; i = i + 1) begin
-				nm[i] <= 4'd0;      // 編號清 0
-				tm[i] <= 4'd0;      // 時間清 0
-        	end
-		end
-		else begin
-			// 寫入動作 ------------------------------------------------
-			if (we && !full) begin
-				nm[tl] <= dn;
-				tm[tl] <= dt;
-				tl <= (tl == DEPTH-1) ? 0 : tl + 1;   // 環形遞增
-			end
+    // 組合邏輯計算 full 和 empty 狀態，以及是否會發生讀寫
+    assign full = (count_r == DEPTH);
+    assign empty = (count_r == 0);
 
-			// 讀出動作 ------------------------------------------------
-			if (re && !empty) begin
-				hd <= (hd == DEPTH-1) ? 0 : hd + 1;   // 環形遞增
-			end
+    assign write_en_comb = we && !full;
+    assign read_en_comb  = re && !empty; // dispatcher 發來的 re，且 queue 非空
 
-			// 元素計數器 --------------------------------------------
-			case ({we && !full, re && !empty})
-				2'b10: ct <= ct + 1;   // 只有寫入
-				2'b01: ct <= ct - 1;   // 只有讀出
-				default: ;            // 其餘情況 ct 不變
-			endcase
-		end
-	end
+    // 輸出數據直接來自 mem[hd_r] (當前讀指針指向的數據)
+    // 注意：這表示 qn_out/qt_out 會在 hd_r 更新後的下一個週期才看到新數據
+    // 如果希望同週期看到，qn_out/qt_out 應基於 hd_next 或更複雜的邏輯
+    assign qn_out = mem[hd_r][7:4];
+    assign qt_out = mem[hd_r][3:0];
+
+    // 計算下一個狀態的指針和計數器
+    assign tl_next = write_en_comb ? ((DEPTH > 0 && tl_r == DEPTH-1) ? 0 : tl_r + 1) : tl_r;
+    assign hd_next = read_en_comb  ? ((DEPTH > 0 && hd_r == DEPTH-1) ? 0 : hd_r + 1) : hd_r;
+
+    assign count_next = (write_en_comb && !read_en_comb) ? count_r + 1 :
+                        (!write_en_comb && read_en_comb) ? count_r - 1 :
+                                                           count_r;
+    integer i;
+    // qdbg 生成
+    generate
+        genvar k;
+        for (k = 0; k < DEPTH; k = k + 1) begin : qdbg_gen
+            assign qdbg[(k+1)*DATA_W-1 -: DATA_W] = mem[k];
+        end
+        if (DEPTH == 0) begin : qdbg_empty_case
+            assign qdbg = 0;
+        end
+    endgenerate
+
+    always @(posedge clk) begin
+        if (rst) begin
+            hd_r    <= 0;
+            tl_r    <= 0;
+            count_r <= 0;
+            for (i = 0; i < DEPTH; i = i + 1) begin
+                mem[i] <= 0;
+            end
+        end
+        else begin
+            if (write_en_comb) begin
+                mem[tl_r] <= {dn_in, dt_in}; // 寫入當前的 tl_r
+            end
+
+            // 更新指針和計數器
+            // 注意：如果同時讀寫，count_r 不變，但 hd_r 和 tl_r 都會移動
+            hd_r    <= hd_next;
+            tl_r    <= tl_next;
+            count_r <= count_next;
+        end
+    end
 endmodule

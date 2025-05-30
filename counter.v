@@ -1,60 +1,39 @@
-//--------------------------------------------------------------
-//  counter.v
-//  -----------------------------------------------------------
-//  功能 : 單一櫃台（Counter）之服務狀態機
-//         ─ 收到 1-拍脈衝 ld=1 時，載入 {客人編號 dn, 服務時間 dt}
-//         ─ busy=1 代表櫃台正在服務；rem 每拍倒數
-//         ─ rem 歸零後自動釋放櫃台 (busy<=0) 並將輸出歸 0
-//--------------------------------------------------------------
-module counter(clk, rst_n, ld, dn, dt, busy, num, rem);
-    parameter TIME_W = 4;          // 服務時間位元數，預設 4 bits
-
-    //==================== 時脈 / 重設 =========================
-    input  clk;                   // 系統時脈
-    input  rst_n;                 // 同步低有效重設
-
-    //==================== 新客人載入介面 ======================
-    input         ld;             // 載入脈衝 (HIGH 1 拍)
-    input  [3:0]  dn;             // data-num  : 客人編號
-    input  [TIME_W-1:0] dt;       // data-time : 服務時間
-
-    //==================== 狀態輸出 ===========================
-    output reg        busy;       // =1，櫃台忙碌
-    output reg [3:0]  num;        // 現正服務之客人編號	(idle=0)
-    output reg [TIME_W-1:0] rem;  // 倒數剩餘時間		(idle=0)
-
-	//--------------------------------------------------------------
-	//  主時序區塊
-	//  -----------------------------------------------------------
-	//  ld=1   : 載入資料並進入忙碌狀態 (busy<=1)
-	//  busy=1 : 每拍 rem--；倒數至 0 釋放櫃台 (busy<=0)
-	//--------------------------------------------------------------
-	always @(posedge clk or negedge rst_n) begin
-		if (!rst_n) begin
-			// ---------- 非同步重設 --------------------------------
-			busy <= 1'b0;
-			num  <= 4'd0;
-			rem  <= {TIME_W{1'b0}};
-		end
-		else begin
-			if (ld) begin
-				// ---------- 進入服務 -------------------------------
-				busy <= 1'b1;
-				num  <= dn;
-				rem  <= dt;
-			end
-			else if (busy) begin
-				// ---------- 服務進行中：倒數 -----------------------
-				if (rem > 1)
-					rem <= rem - 1'b1;          // 尚未完成
-				else begin
-					// rem==1 : 下一拍歸 0，釋放櫃台
-					busy <= 1'b0;
-					num  <= 4'd0;
-					rem  <= {TIME_W{1'b0}};
-				end
-			end
-			// idle 狀態 (busy=0 且 ld=0) : 保持輸出為 0
-		end
-	end
+module counter #(
+    parameter NUM_W  = 4,
+    parameter TIME_W = 4
+) (
+    input clk,
+    input rst,
+    input ld,
+    input [NUM_W-1:0] dn_in,
+    input [TIME_W-1:0] dt_in,
+    output reg busy,
+    output reg [NUM_W-1:0] num_out,
+    output reg [TIME_W-1:0] rem_out
+);
+    always @(posedge clk) begin
+        if (rst) begin
+            busy    <= 1'b0;
+            num_out <= 0;
+            rem_out <= 0;
+        end
+        else begin
+            if (ld) begin
+                busy    <= 1'b1;
+                num_out <= dn_in;
+                rem_out <= dt_in;
+            end
+            else if (busy) begin
+                if (rem_out > 1) begin
+                    rem_out <= rem_out - 1;
+                end
+                else begin
+                    busy    <= 1'b0;
+                    num_out <= 0;
+                    rem_out <= 0;
+                end
+            end
+        end
+    end
+    
 endmodule
